@@ -18,15 +18,7 @@ local function has_plenary()
   return ok
 end
 
----@type boolean
-local server_ready = false
-
----@type integer
-local last_open_ms = 0
-
-local startup_grace_ms = 2000
-
----URL percent encode a string (matching Python's urllib.parse.quote behavior)
+---Check if running on Windows
 ---Python's quote() has safe='/' by default, so "/" is NOT encoded.
 ---All other special characters ARE encoded including ":" and "\" (Windows paths).
 ---@param str string String to encode
@@ -90,14 +82,8 @@ local function async_post(url, data)
 
   debug_log("POST %s (data size: %d bytes)", url, #json_data)
 
-  -- Avoid spamming requests before the server is up
-  local now_ms = uv.now()
-  if not server_ready and (now_ms - last_open_ms) < startup_grace_ms then
-    return
-  end
-
   -- Direct curl call. In Neovim, jobstart with an array doesn't spawn a window.
-  -- This is the most compatible way to match original plugin performance.
+  -- We don't use server_ready gates to ensure requests are always attempted.
   local job_id = vim.fn.jobstart({
     "curl",
     "-s",
@@ -105,12 +91,6 @@ local function async_post(url, data)
     "-H", "Content-Type: application/json",
     "--data", "@-",
     url,
-  }, {
-    on_exit = function(_, code)
-      if code == 0 then
-        server_ready = true
-      end
-    end,
   })
 
   if job_id > 0 then
@@ -202,10 +182,6 @@ function M.open(bufnr)
   local viv_cmd = config.get_viv_binary()
 
   debug_log("Opening with viv (%s): %s", viv_cmd, arg)
-
-  -- Mark server as not ready until it responds
-  server_ready = false
-  last_open_ms = uv.now()
 
   -- Cross-platform job execution
   if is_windows() then
