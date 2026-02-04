@@ -5,7 +5,8 @@ local M = {}
 local config = require("vivify.config")
 
 ---URL percent encode a string (matching Python's urllib.parse.quote behavior)
----Encodes ALL special characters including path separators (matching original vivify.vim)
+---Python's quote() has safe='/' by default, so "/" is NOT encoded.
+---All other special characters ARE encoded including ":" and "\" (Windows paths).
 ---@param str string String to encode
 ---@return string Encoded string
 local function percent_encode(str)
@@ -13,10 +14,13 @@ local function percent_encode(str)
     return ""
   end
   str = tostring(str)
-  -- Encode everything except unreserved characters (RFC 3986)
+  -- Normalize Windows backslashes to forward slashes for URL compatibility
+  -- This ensures cross-platform URL consistency
+  str = str:gsub("\\", "/")
+  -- Encode everything except unreserved characters (RFC 3986) and "/"
   -- unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
-  -- NOTE: We encode "/" and "\" as well to match original Python quote() behavior
-  str = str:gsub("([^%w%-%._~])", function(c)
+  -- "/" is kept as-is to match Python's urllib.parse.quote(safe='/') default
+  str = str:gsub("([^%w%-%._~/])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
   return str

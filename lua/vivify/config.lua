@@ -19,6 +19,39 @@ local M = {}
 ---@type VivifyConfig
 M.options = vim.deepcopy(defaults)
 
+---Read legacy g: variables from original vivify.vim for backwards compatibility
+---@return table Legacy options merged as modern config format
+local function read_legacy_globals()
+  local legacy = {}
+
+  -- g:vivify_instant_refresh (1 = true, 0 = false)
+  local instant = vim.g.vivify_instant_refresh
+  if instant ~= nil then
+    legacy.instant_refresh = (instant == 1 or instant == true)
+  end
+
+  -- g:vivify_auto_scroll (1 = true, 0 = false)
+  local scroll = vim.g.vivify_auto_scroll
+  if scroll ~= nil then
+    legacy.auto_scroll = (scroll == 1 or scroll == true)
+  end
+
+  -- g:vivify_filetypes (array of additional filetypes)
+  local filetypes = vim.g.vivify_filetypes
+  if filetypes and type(filetypes) == "table" then
+    -- Merge with defaults: add user filetypes to the default list
+    local merged = vim.deepcopy(defaults.filetypes)
+    for _, ft in ipairs(filetypes) do
+      if not vim.tbl_contains(merged, ft) then
+        table.insert(merged, ft)
+      end
+    end
+    legacy.filetypes = merged
+  end
+
+  return legacy
+end
+
 ---Get the configured port for Vivify server
 ---@return number
 function M.get_port()
@@ -70,7 +103,11 @@ end
 ---Setup configuration
 ---@param opts table|nil User options
 function M.setup(opts)
-  M.options = M.validate(opts)
+  -- Read legacy g: variables first (for backwards compatibility with vivify.vim)
+  local legacy = read_legacy_globals()
+  -- Merge: defaults < legacy globals < user opts (user opts have highest priority)
+  local merged = vim.tbl_deep_extend("force", defaults, legacy, opts or {})
+  M.options = M.validate(merged)
 end
 
 ---Reset configuration to defaults

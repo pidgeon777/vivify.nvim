@@ -177,13 +177,19 @@ If you're migrating from the original Vimscript plugin:
 | `g:vivify_filetypes` | `opts.filetypes` |
 | `:Vivify` | `:Vivify` (same) |
 
+### Backwards Compatibility
+
+**Good news!** The legacy `g:` variables are still supported for backwards compatibility.
+If you have existing configuration using the old Vimscript variables, they will automatically
+be respected. The priority order is: `defaults < g: variables < setup() opts`.
+
 ```lua
--- Before (vivify.vim)
+-- These legacy variables still work (but modern setup() is preferred)
 vim.g.vivify_instant_refresh = 1
 vim.g.vivify_auto_scroll = 1
 vim.g.vivify_filetypes = { "vimwiki" }
 
--- After (vivify.nvim)
+-- Modern approach (recommended)
 require("vivify").setup({
   instant_refresh = true,
   auto_scroll = true,
