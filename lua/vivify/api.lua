@@ -4,43 +4,22 @@ local M = {}
 
 local config = require("vivify.config")
 
----URL encode a string (percent encoding)
+---URL percent encode a string (matching Python's urllib.parse.quote behavior)
+---Encodes ALL special characters including path separators (matching original vivify.vim)
 ---@param str string String to encode
 ---@return string Encoded string
-local function url_encode(str)
+local function percent_encode(str)
   if not str then
     return ""
   end
-  -- Convert to string if needed
   str = tostring(str)
-  -- Encode special characters
-  str = str:gsub("([^%w%-%.%_%~])", function(c)
+  -- Encode everything except unreserved characters (RFC 3986)
+  -- unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
+  -- NOTE: We encode "/" and "\" as well to match original Python quote() behavior
+  str = str:gsub("([^%w%-%._~])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
   return str
-end
-
----Normalize file path for URL usage
----@param path string File path
----@return string Normalized and encoded path
-local function normalize_path_for_url(path)
-  if not path then
-    return ""
-  end
-  -- Normalize path separators to forward slashes
-  path = path:gsub("\\", "/")
-  -- URL encode the path
-  -- But keep forward slashes and colons (for Windows drive letters)
-  local parts = {}
-  for part in path:gmatch("[^/]+") do
-    table.insert(parts, url_encode(part))
-  end
-  local result = table.concat(parts, "/")
-  -- Preserve leading slash if present
-  if path:sub(1, 1) == "/" then
-    result = "/" .. result
-  end
-  return result
 end
 
 ---Get the base URL for Vivify server
@@ -55,30 +34,34 @@ end
 local function debug_log(msg, ...)
   if config.options.debug then
     local formatted = string.format(msg, ...)
-    vim.notify("[vivify.nvim] " .. formatted, vim.log.levels.DEBUG)
+    vim.schedule(function()
+      vim.notify("[vivify.nvim] " .. formatted, vim.log.levels.DEBUG)
+    end)
   end
 end
 
----Execute async HTTP POST request
+---Execute async HTTP POST request using stdin for data (handles large files safely)
 ---@param url string Full URL
 ---@param data table Data to send as JSON
 local function async_post(url, data)
   local json_data = vim.fn.json_encode(data)
 
-  debug_log("POST %s with data: %s", url, json_data)
+  debug_log("POST %s (data size: %d bytes)", url, #json_data)
 
   -- Use vim.system for Neovim 0.10+ or fallback to jobstart
   if vim.system then
+    -- Use stdin for data to avoid command line length limits
     vim.system({
       "curl",
       "-s", -- silent
       "-X", "POST",
       "-H", "Content-Type: application/json",
-      "-d", json_data,
+      "--data", "@-", -- read from stdin
       url,
     }, {
       text = true,
-      detach = true,
+      stdin = json_data, -- send data via stdin
+      -- Note: NOT using detach=true so callback works for error handling
     }, function(obj)
       if obj.code ~= 0 and config.options.debug then
         vim.schedule(function()
@@ -87,24 +70,29 @@ local function async_post(url, data)
       end
     end)
   else
-    -- Fallback for older Neovim versions
-    vim.fn.jobstart({
+    -- Fallback for older Neovim versions using jobstart with stdin
+    local job_id = vim.fn.jobstart({
       "curl",
       "-s",
       "-X", "POST",
       "-H", "Content-Type: application/json",
-      "-d", json_data,
+      "--data", "@-", -- read from stdin
       url,
     }, {
-      detach = true,
-      on_stderr = function(_, data)
-        if config.options.debug and data and data[1] ~= "" then
+      on_stderr = function(_, data_lines)
+        if config.options.debug and data_lines and data_lines[1] ~= "" then
           vim.schedule(function()
-            debug_log("curl error: %s", table.concat(data, "\n"))
+            debug_log("curl error: %s", table.concat(data_lines, "\n"))
           end)
         end
       end,
     })
+
+    if job_id > 0 then
+      -- Send data via stdin and close
+      vim.fn.chansend(job_id, json_data)
+      vim.fn.chanclose(job_id, "stdin")
+    end
   end
 end
 
@@ -112,6 +100,12 @@ end
 ---@param bufnr number|nil Buffer number (default: current)
 function M.sync_content(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Check filetype dynamically (matching original behavior)
+  local ft = vim.bo[bufnr].filetype
+  if not config.is_vivify_filetype(ft) then
+    return
+  end
 
   -- Get all lines from buffer
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -124,7 +118,9 @@ function M.sync_content(bufnr)
     return
   end
 
-  local encoded_path = normalize_path_for_url(filepath)
+  -- Percent encode the full path (matching original behavior)
+  -- Original: s:viv_url . '/viewer' . s:percent_encode(expand('%:p'))
+  local encoded_path = percent_encode(filepath)
   local url = get_base_url() .. "/viewer" .. encoded_path
 
   async_post(url, { content = content })
@@ -134,6 +130,12 @@ end
 ---@param bufnr number|nil Buffer number (default: current)
 function M.sync_cursor(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Check filetype dynamically (matching original behavior)
+  local ft = vim.bo[bufnr].filetype
+  if not config.is_vivify_filetype(ft) then
+    return
+  end
 
   -- Get cursor line (1-indexed)
   local cursor = vim.api.nvim_win_get_cursor(0)
@@ -146,7 +148,8 @@ function M.sync_cursor(bufnr)
     return
   end
 
-  local encoded_path = normalize_path_for_url(filepath)
+  -- Percent encode the full path (matching original behavior)
+  local encoded_path = percent_encode(filepath)
   local url = get_base_url() .. "/viewer" .. encoded_path
 
   async_post(url, { cursor = line })
@@ -168,6 +171,7 @@ function M.open(bufnr)
   local line = cursor[1]
 
   -- Escape colons in filepath for viv command (as in original)
+  -- Original: expand('%:p')->substitute(':', '\\:', 'g')
   local escaped_path = filepath:gsub(":", "\\:")
 
   -- Construct the argument: filepath:line
@@ -178,37 +182,26 @@ function M.open(bufnr)
   -- Use vim.system for Neovim 0.10+ or fallback
   if vim.system then
     vim.system({ "viv", arg }, {
-      detach = true,
       text = true,
-    }, function(obj)
-      if obj.code ~= 0 then
-        vim.schedule(function()
-          vim.notify(
-            string.format("[vivify.nvim] Failed to open viewer: %s", obj.stderr or "unknown error"),
-            vim.log.levels.ERROR
-          )
-        end)
-      end
-    end)
+      -- Detach so viv runs independently (matching original behavior)
+      detach = true,
+      -- Redirect IO to null (matching original: 'in_io': 'null', 'out_io': 'null', 'err_io': 'null')
+      stdin = false,
+      stdout = false,
+      stderr = false,
+    })
   else
     vim.fn.jobstart({ "viv", arg }, {
       detach = true,
-      on_stderr = function(_, data)
-        if data and data[1] ~= "" then
-          vim.schedule(function()
-            vim.notify(
-              string.format("[vivify.nvim] Failed to open viewer: %s", table.concat(data, "\n")),
-              vim.log.levels.ERROR
-            )
-          end)
-        end
-      end,
+      on_stdout = false,
+      on_stderr = false,
     })
   end
 end
 
 ---Check if Vivify dependencies are available
----@return boolean, string|nil ok, error_message
+---@return boolean ok
+---@return string|nil error_message
 function M.check_dependencies()
   -- Check for viv executable
   if vim.fn.executable("viv") ~= 1 then
