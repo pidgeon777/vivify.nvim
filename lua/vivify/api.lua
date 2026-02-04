@@ -4,6 +4,12 @@ local M = {}
 
 local config = require("vivify.config")
 
+---Check if running on Windows
+---@return boolean
+local function is_windows()
+  return vim.fn.has("win32") == 1 or vim.fn.has("win64") == 1
+end
+
 ---URL percent encode a string (matching Python's urllib.parse.quote behavior)
 ---Python's quote() has safe='/' by default, so "/" is NOT encoded.
 ---All other special characters ARE encoded including ":" and "\" (Windows paths).
@@ -45,6 +51,7 @@ local function debug_log(msg, ...)
 end
 
 ---Execute async HTTP POST request using stdin for data (handles large files safely)
+---On Windows, uses PowerShell's Invoke-RestMethod to avoid console window flashing
 ---@param url string Full URL
 ---@param data table Data to send as JSON
 local function async_post(url, data)
@@ -52,7 +59,31 @@ local function async_post(url, data)
 
   debug_log("POST %s (data size: %d bytes)", url, #json_data)
 
-  -- Use vim.system for Neovim 0.10+ or fallback to jobstart
+  -- On Windows, use PowerShell Invoke-RestMethod to avoid console window flashing
+  -- PowerShell runs without visible window when called from Neovim
+  if is_windows() then
+    -- Escape JSON for PowerShell (double quotes need escaping)
+    local escaped_json = json_data:gsub('"', '\\"')
+    local ps_cmd = string.format(
+      [[powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Invoke-RestMethod -Uri '%s' -Method POST -ContentType 'application/json' -Body '%s' 2>$null"]],
+      url,
+      escaped_json
+    )
+
+    if vim.system then
+      vim.system({ "cmd", "/c", ps_cmd }, {
+        text = true,
+        detach = true,
+      })
+    else
+      vim.fn.jobstart({ "cmd", "/c", ps_cmd }, {
+        detach = true,
+      })
+    end
+    return
+  end
+
+  -- Unix: Use curl normally (no console window issues)
   if vim.system then
     -- Use stdin for data to avoid command line length limits
     vim.system({
@@ -174,15 +205,59 @@ function M.open(bufnr)
   local cursor = vim.api.nvim_win_get_cursor(0)
   local line = cursor[1]
 
+  -- Get the viv binary path (configured or default "viv")
+  local viv_cmd = config.get_viv_binary()
+
+  -- On Windows, handle differently to avoid console window flashing
+  if is_windows() then
+    -- For .cmd/.bat files, use cmd /c directly
+    -- For .exe files, use start /b to hide console
+    local is_cmd_script = viv_cmd:match("%.cmd$") or viv_cmd:match("%.bat$")
+
+    -- Construct the argument: filepath:line (escape colons for viv)
+    local escaped_path = filepath:gsub(":", "\\:")
+    local arg = string.format("%s:%d", escaped_path, line)
+
+    debug_log("Opening with viv (%s): %s (Windows mode, script=%s)", viv_cmd, arg, tostring(is_cmd_script))
+
+    if is_cmd_script then
+      -- For .cmd scripts, call directly through cmd /c
+      -- The script handles its own background execution
+      local cmd_line = string.format('cmd /c ""%s" "%s""', viv_cmd, arg)
+      if vim.system then
+        vim.system({ "cmd", "/c", string.format('"""%s""" "%s"', viv_cmd, arg) }, {
+          text = true,
+          detach = true,
+        })
+      else
+        vim.fn.jobstart(string.format('cmd /c ""%s" "%s""', viv_cmd, arg), {
+          detach = true,
+        })
+      end
+    else
+      -- For .exe files, use start /b to run without visible console window
+      -- "start /b" runs the command in background without new window
+      if vim.system then
+        vim.system({ "cmd", "/c", "start", "", "/b", viv_cmd, arg }, {
+          text = true,
+          detach = true,
+        })
+      else
+        vim.fn.jobstart({ "cmd", "/c", "start", "", "/b", viv_cmd, arg }, {
+          detach = true,
+        })
+      end
+    end
+    return
+  end
+
+  -- Unix: standard execution
   -- Escape colons in filepath for viv command (as in original)
   -- Original: expand('%:p')->substitute(':', '\\:', 'g')
   local escaped_path = filepath:gsub(":", "\\:")
 
   -- Construct the argument: filepath:line
   local arg = string.format("%s:%d", escaped_path, line)
-
-  -- Get the viv binary path (configured or default "viv")
-  local viv_cmd = config.get_viv_binary()
 
   debug_log("Opening with viv (%s): %s", viv_cmd, arg)
 
