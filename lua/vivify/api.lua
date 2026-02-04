@@ -36,12 +36,9 @@ local function percent_encode(str)
     return ""
   end
   str = tostring(str)
-  -- Normalize Windows backslashes to forward slashes for URL compatibility
-  -- This ensures cross-platform URL consistency
-  str = str:gsub("\\", "/")
+  -- IMPORTANT: Do NOT normalize backslashes here. 
+  -- We match Python's default behavior where '/' is safe, but '\' is not.
   -- Encode everything except unreserved characters (RFC 3986) and "/"
-  -- unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
-  -- "/" is kept as-is to match Python's urllib.parse.quote(safe='/') default
   str = str:gsub("([^%w%-%._~/])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
@@ -129,10 +126,10 @@ function M.sync_content(bufnr)
     return
   end
 
-  -- Percent encode the full path (matching original behavior)
+  -- Percent encode the full path (matching original behavior exactly)
+  -- Original: s:viv_url . '/viewer' . s:percent_encode(expand('%:p'))
   local encoded_path = percent_encode(filepath)
-  -- Ensure leading slash between /viewer and path
-  local url = get_base_url() .. "/viewer/" .. encoded_path
+  local url = get_base_url() .. "/viewer" .. encoded_path
 
   async_post(url, { content = content })
 end
@@ -159,10 +156,9 @@ function M.sync_cursor(bufnr)
     return
   end
 
-  -- Percent encode the full path (matching original behavior)
+  -- Percent encode the full path (matching original behavior exactly)
   local encoded_path = percent_encode(filepath)
-  -- Ensure leading slash between /viewer and path
-  local url = get_base_url() .. "/viewer/" .. encoded_path
+  local url = get_base_url() .. "/viewer" .. encoded_path
 
   async_post(url, { cursor = line })
 end
