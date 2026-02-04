@@ -32,22 +32,29 @@ local startup_grace_ms = 2000
 ---@param str string String to encode
 ---@return string Encoded string
 ---Build the unique Viewer ID used by Vivify server
----On Windows, it matches the browser format: C:/path/file.md
+---Matches browser format for ID recognition
 ---@param str string Filepath
 ---@return string Path segment for sync URL
 local function build_viewer_id(str)
   if not str then
     return ""
   end
-  str = tostring(str)
+  -- Get absolute, normalized path
+  str = vim.fn.fnamemodify(str, ":p")
 
-  -- On Windows, convert backslashes to forward slashes to match browser ID
+  -- On Windows, ensure forward slashes and DRIVE letter format
   if is_windows() then
+    -- Convert \ to /
     str = str:gsub("\\", "/")
+    -- Ensure first char is NOT a slash for the segment (it will be added in final URL)
+    if str:sub(1,1) == "/" then
+      str = str:sub(2)
+    end
   end
 
-  -- Encode only truly special characters required for a URL path segment.
-  -- Leave ":" and "/" intact to match the browser's ID string exactly.
+  -- Percent encode only essential shell/url characters, preserving path structure
+  -- We MUST keep ":" and "/" literal because Vivify's router uses them to identify the file
+  -- matches browser: C:/path/file.md
   str = str:gsub("([^%w%-%._~:/])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
@@ -74,7 +81,8 @@ local function debug_log(msg, ...)
   end
 end
 
----Execute async HTTP POST request using plenary.curl
+---Execute async HTTP POST request using direct curl
+---Uses jobstart with array to avoid console window flashing on Windows
 ---@param url string Full URL
 ---@param data table Data to send as JSON
 local function async_post(url, data)
@@ -82,37 +90,33 @@ local function async_post(url, data)
 
   debug_log("POST %s (data size: %d bytes)", url, #json_data)
 
-  local has_plenary, curl = pcall(require, "plenary.curl")
-  if not has_plenary then
-    return
-  end
-
   -- Avoid spamming requests before the server is up
   local now_ms = uv.now()
   if not server_ready and (now_ms - last_open_ms) < startup_grace_ms then
     return
   end
 
-  curl.post(url, {
-    body = json_data,
-    headers = {
-      ["Content-Type"] = "application/json",
-    },
-    on_error = function()
-      -- Suppress errors when the server isn't ready or is temporarily unavailable
-      return
-    end,
-    callback = function(response)
-      if response.status and response.status >= 200 and response.status < 500 then
+  -- Direct curl call. In Neovim, jobstart with an array doesn't spawn a window.
+  -- This is the most compatible way to match original plugin performance.
+  local job_id = vim.fn.jobstart({
+    "curl",
+    "-s",
+    "-X", "POST",
+    "-H", "Content-Type: application/json",
+    "--data", "@-",
+    url,
+  }, {
+    on_exit = function(_, code)
+      if code == 0 then
         server_ready = true
-      end
-      if config.options.debug and response.status and response.status ~= 200 then
-        vim.schedule(function()
-          debug_log("POST failed (status %s)", tostring(response.status))
-        end)
       end
     end,
   })
+
+  if job_id > 0 then
+    vim.fn.chansend(job_id, json_data)
+    vim.fn.chanclose(job_id, "stdin")
+  end
 end
 
 ---Sync buffer content to Vivify viewer
