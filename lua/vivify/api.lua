@@ -8,6 +8,12 @@ local config = require("vivify.config")
 ---@type table|nil
 local logger = nil
 
+-- Forward declarations (avoid diagnostics for use-before-definition)
+---@type fun(msg: string, ...)|nil
+local debug_log
+---@type fun(msg: string, ...)|nil
+local error_log
+
 ---Get or create the logger instance
 ---@return table Logger instance
 local function get_logger()
@@ -68,7 +74,8 @@ local function encode_for_vivify(str)
   end
 
   -- Get absolute, normalized path
-  str = vim.fn.fnamemodify(str, ":p")
+  local normalized = vim.fn.fnamemodify(str, ":p")
+  local realpath = normalized
 
   -- CRITICAL: On Windows, use fs_realpath to get the TRUE filesystem path
   -- This resolves:
@@ -77,23 +84,33 @@ local function encode_for_vivify(str)
   -- This matches exactly what Node.js path.resolve() returns
   if is_windows() then
     local uv = vim.uv or vim.loop
-    local realpath = uv.fs_realpath(str)
-    if realpath then
-      str = realpath
+    local resolved = uv.fs_realpath(normalized)
+    if resolved then
+      realpath = resolved
     else
       -- Fallback: at least convert forward slashes to backslashes
-      str = str:gsub("/", "\\")
+      realpath = normalized:gsub("/", "\\")
     end
+  end
+
+  if config.options.debug then
+    debug_log("Sync path raw=%s", str)
+    debug_log("Sync path normalized=%s", normalized)
+    debug_log("Sync path real=%s", realpath)
   end
 
   -- Encode all special characters except forward slash
   -- On Windows: backslashes become %5C, colons become %3A
   -- On Unix: forward slashes are preserved
-  str = str:gsub("([^%w%-%._~/])", function(c)
+  local encoded = realpath:gsub("([^%w%-%._~/])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
 
-  return str
+  if config.options.debug then
+    debug_log("Sync path encoded=%s", encoded)
+  end
+
+  return encoded
 end
 
 ---Get the base URL for Vivify server
@@ -106,7 +123,7 @@ end
 ---Log debug message (both to notify and file log)
 ---@param msg string Message to log
 ---@vararg any Additional format arguments
-local function debug_log(msg, ...)
+debug_log = function(msg, ...)
   local formatted = string.format(msg, ...)
   -- Always log to file for debugging
   get_logger().debug(formatted)
@@ -121,7 +138,7 @@ end
 ---Log error message
 ---@param msg string Message to log
 ---@vararg any Additional format arguments
-local function error_log(msg, ...)
+error_log = function(msg, ...)
   local formatted = string.format(msg, ...)
   get_logger().error(formatted)
   if config.options.debug then
@@ -131,11 +148,37 @@ local function error_log(msg, ...)
   end
 end
 
+---Decode the number of connected clients from response body
+---@param response table|nil
+---@return number|nil
+local function decode_clients(response)
+  if not response or response.body == nil then
+    return nil
+  end
+
+  if type(response.body) == "table" and response.body.clients ~= nil then
+    return tonumber(response.body.clients)
+  end
+
+  if type(response.body) == "string" and response.body ~= "" then
+    local json_decode = vim.json and vim.json.decode or vim.fn.json_decode
+    local ok, decoded = pcall(json_decode, response.body)
+    if ok and type(decoded) == "table" and decoded.clients ~= nil then
+      return tonumber(decoded.clients)
+    end
+  end
+
+  return nil
+end
+
 ---Execute async HTTP POST request using plenary.curl
 ---This is the reliable cross-platform solution that works correctly
 ---@param url string Full URL
 ---@param data table Data to send as JSON
-local function async_post(url, data)
+---@param opts? table Optional callbacks
+---@param opts.on_response? fun(response: table): nil
+---@param opts.on_error? fun(err: any): nil
+local function async_post(url, data, opts)
   local json_data = vim.fn.json_encode(data)
 
   debug_log("POST %s (data size: %d bytes)", url, #json_data)
@@ -146,6 +189,9 @@ local function async_post(url, data)
     error_log("plenary.curl not available")
     return
   end
+
+  local on_response = opts and opts.on_response or nil
+  local on_error = opts and opts.on_error or nil
 
   -- Perform async POST request
   curl.post(url, {
@@ -159,12 +205,62 @@ local function async_post(url, data)
       elseif response.status then
         debug_log("POST response status: %d", response.status)
       end
+
+      if on_response then
+        on_response(response)
+      end
     end,
     on_error = function(err)
       -- Only log if debug mode to avoid spam when server isn't running
       debug_log("POST error: %s", vim.inspect(err))
+      if on_error then
+        on_error(err)
+      end
     end,
   })
+end
+
+---Build sync URL candidates (primary and fallback)
+---@param filepath string
+---@return string[]
+local function build_sync_urls(filepath)
+  local encoded = encode_for_vivify(filepath)
+  local urls = {
+    -- Primary: matches server pathToURL (with slash)
+    get_base_url() .. "/viewer/" .. encoded,
+    -- Fallback: original vivify.vim format (no slash)
+    get_base_url() .. "/viewer" .. encoded,
+  }
+
+  if config.options.debug then
+    debug_log("Sync URLs: %s | %s", urls[1], urls[2])
+  end
+
+  return urls
+end
+
+---POST with fallback if no clients are matched
+---@param urls string[]
+---@param data table
+local function post_with_fallback(urls, data)
+  local function try_at(index)
+    local url = urls[index]
+    if not url then
+      return
+    end
+
+    async_post(url, data, {
+      on_response = function(response)
+        local clients = decode_clients(response)
+        if clients == 0 and index < #urls then
+          debug_log("No clients for %s, trying fallback %d/%d", url, index + 1, #urls)
+          try_at(index + 1)
+        end
+      end,
+    })
+  end
+
+  try_at(1)
 end
 
 ---Sync buffer content to Vivify viewer
@@ -189,13 +285,8 @@ function M.sync_content(bufnr)
     return
   end
 
-  -- Build URL matching Vivify server's pathToURL format: /viewer/ + encoded_path
-  -- The server uses: `/${route}/${encodeURIComponent(path).replaceAll('%2F', '/')}`
-  -- Example: http://localhost:31622/viewer/C%3A%5CUsers%5Cpath%5Cfile.md
-  -- The server's urlToPath() strips "/viewer" prefix and decodes, yielding the filepath
-  local url = get_base_url() .. "/viewer/" .. encode_for_vivify(filepath)
-
-  async_post(url, { content = content })
+  local urls = build_sync_urls(filepath)
+  post_with_fallback(urls, { content = content })
 end
 
 ---Sync cursor position to Vivify viewer
@@ -220,10 +311,8 @@ function M.sync_cursor(bufnr)
     return
   end
 
-  -- Build URL matching Vivify server's pathToURL format (with slash after /viewer)
-  local url = get_base_url() .. "/viewer/" .. encode_for_vivify(filepath)
-
-  async_post(url, { cursor = line })
+  local urls = build_sync_urls(filepath)
+  post_with_fallback(urls, { cursor = line })
 end
 
 ---Open current file in Vivify viewer
