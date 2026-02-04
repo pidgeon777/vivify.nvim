@@ -181,11 +181,14 @@ function M.open(bufnr)
   -- Construct the argument: filepath:line
   local arg = string.format("%s:%d", escaped_path, line)
 
-  debug_log("Opening with viv: %s", arg)
+  -- Get the viv binary path (configured or default "viv")
+  local viv_cmd = config.get_viv_binary()
+
+  debug_log("Opening with viv (%s): %s", viv_cmd, arg)
 
   -- Use vim.system for Neovim 0.10+ or fallback
   if vim.system then
-    vim.system({ "viv", arg }, {
+    vim.system({ viv_cmd, arg }, {
       text = true,
       -- Detach so viv runs independently (matching original behavior)
       detach = true,
@@ -195,7 +198,7 @@ function M.open(bufnr)
       stderr = false,
     })
   else
-    vim.fn.jobstart({ "viv", arg }, {
+    vim.fn.jobstart({ viv_cmd, arg }, {
       detach = true,
       on_stdout = false,
       on_stderr = false,
@@ -207,9 +210,16 @@ end
 ---@return boolean ok
 ---@return string|nil error_message
 function M.check_dependencies()
+  -- Get the configured viv binary
+  local viv_cmd = config.get_viv_binary()
+
   -- Check for viv executable
-  if vim.fn.executable("viv") ~= 1 then
-    return false, "'viv' command not found in PATH. Please install Vivify: https://github.com/jannis-baum/Vivify"
+  if vim.fn.executable(viv_cmd) ~= 1 then
+    if viv_cmd == "viv" then
+      return false, "'viv' command not found in PATH. Please install Vivify: https://github.com/jannis-baum/Vivify"
+    else
+      return false, string.format("Custom viv binary not found: '%s'. Check your viv_binary config.", viv_cmd)
+    end
   end
 
   -- Check for curl

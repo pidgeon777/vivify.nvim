@@ -105,6 +105,9 @@ Default configuration:~
       -- Port for Vivify server (uses $VIV_PORT or 31622 if not set)
       port = nil,
 
+      -- Custom path to viv executable (uses "viv" from PATH if not set)
+      viv_binary = nil,
+
       -- Refresh content on TextChanged (true) or CursorHold (false)
       instant_refresh = true,
 
@@ -125,6 +128,22 @@ port ~
     Default: `nil` (uses $VIV_PORT environment variable, or 31622)
 
     The port number where the Vivify server is running.
+
+                                                        *vivify.viv_binary*
+viv_binary ~
+    Type: `string` or `nil`
+    Default: `nil` (uses "viv" from PATH)
+
+    Custom path to the viv executable. Use this when viv is not in your
+    PATH or when you want to use a specific version.
+
+    Example:
+>lua
+    require("vivify").setup({
+      viv_binary = "C:/Program Files/Vivify/viv.exe",  -- Windows
+      -- viv_binary = "/usr/local/bin/viv",            -- Linux/macOS
+    })
+<
 
                                                      *vivify.instant_refresh*
 instant_refresh ~

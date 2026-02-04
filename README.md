@@ -68,6 +68,9 @@ require("vivify").setup({
   -- Port for Vivify server (uses $VIV_PORT or 31622 if not set)
   port = nil,
 
+  -- Custom path to viv executable (uses "viv" from PATH if not set)
+  viv_binary = nil,
+
   -- Refresh content on TextChanged (true) or CursorHold (false)
   instant_refresh = true,
 
@@ -87,10 +90,26 @@ require("vivify").setup({
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `port` | `number\|nil` | `nil` | Port for Vivify server. Uses `$VIV_PORT` env var or `31622` |
+| `viv_binary` | `string\|nil` | `nil` | Custom path to viv executable. Defaults to `"viv"` from PATH |
 | `instant_refresh` | `boolean` | `true` | Sync on every text change vs. on cursor hold |
 | `auto_scroll` | `boolean` | `true` | Scroll viewer with cursor movement |
 | `filetypes` | `string[]` | `{"markdown", "md"}` | Filetypes to treat as markdown |
 | `debug` | `boolean` | `false` | Enable debug logging |
+
+### Custom viv Binary
+
+If `viv` is not in your PATH or you want to use a specific version, set the full path:
+
+```lua
+require("vivify").setup({
+  -- Windows example
+  viv_binary = "C:/Program Files/Vivify/viv.exe",
+  
+  -- Linux/macOS example
+  -- viv_binary = "/usr/local/bin/viv",
+  -- viv_binary = vim.fn.expand("~/.local/bin/viv"),
+})
+```
 
 ## 🚀 Usage
 

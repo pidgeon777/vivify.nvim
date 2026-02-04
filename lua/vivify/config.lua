@@ -1,5 +1,6 @@
 ---@class VivifyConfig
 ---@field port number|nil Port for Vivify server (default: 31622 or $VIV_PORT)
+---@field viv_binary string|nil Custom path to viv executable (default: "viv" from PATH)
 ---@field instant_refresh boolean Refresh on TextChanged (true) or CursorHold (false)
 ---@field auto_scroll boolean Enable auto-scroll on cursor movement
 ---@field filetypes string[] Filetypes to treat as markdown
@@ -8,6 +9,7 @@
 ---@type VivifyConfig
 local defaults = {
   port = nil, -- Will use $VIV_PORT or 31622
+  viv_binary = nil, -- Will use "viv" from PATH
   instant_refresh = true,
   auto_scroll = true,
   filetypes = { "markdown", "md" },
@@ -68,6 +70,15 @@ function M.get_port()
   return 31622
 end
 
+---Get the viv binary path/command to use
+---@return string The viv command or full path
+function M.get_viv_binary()
+  if M.options.viv_binary and M.options.viv_binary ~= "" then
+    return M.options.viv_binary
+  end
+  return "viv"
+end
+
 ---Check if a filetype should be treated as markdown
 ---@param ft string Filetype to check
 ---@return boolean
@@ -91,6 +102,7 @@ function M.validate(opts)
 
   vim.validate({
     port = { opts.port, { "number", "nil" }, true },
+    viv_binary = { opts.viv_binary, { "string", "nil" }, true },
     instant_refresh = { opts.instant_refresh, "boolean", true },
     auto_scroll = { opts.auto_scroll, "boolean", true },
     filetypes = { opts.filetypes, "table", true },
