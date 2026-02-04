@@ -34,30 +34,32 @@ local startup_grace_ms = 2000
 ---Build the unique Viewer ID used by Vivify server
 ---On Windows, it matches the browser format: C:/path/file.md
 ---@param str string Filepath
----@return string Encoded ID for URL
+---@return string Path segment for sync URL
 local function build_viewer_id(str)
   if not str then
     return ""
   end
   str = tostring(str)
 
-  -- Normalize to forward slashes for URL path compatibility
-  -- This matches the ID format seen in Chrome address bar: /viewer/C:/...
-  str = str:gsub("\\", "/")
+  -- On Windows, convert backslashes to forward slashes to match browser ID
+  if is_windows() then
+    str = str:gsub("\\", "/")
+  end
 
-  -- Encode only truly special characters (spaces, etc.)
-  -- Leave ":" and "/" intact to match the browser's ID string exactly
-  str = str:gsub(" ", "%%20")
+  -- Encode only truly special characters required for a URL path segment.
+  -- Leave ":" and "/" intact to match the browser's ID string exactly.
+  str = str:gsub("([^%w%-%._~:/])", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end)
 
   return str
 end
 
 ---Get the base URL for Vivify server
----On Windows, uses 127.0.0.1 instead of localhost for better reliability
 ---@return string Base URL
 local function get_base_url()
-  local host = is_windows() and "127.0.0.1" or "localhost"
-  return string.format("http://%s:%d", host, config.get_port())
+  -- Using localhost to match Chrome address bar
+  return string.format("http://localhost:%d", config.get_port())
 end
 
 ---Log debug message
