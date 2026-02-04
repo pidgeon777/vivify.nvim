@@ -179,7 +179,7 @@ end
 ---@param opts.on_response? fun(response: table): nil
 ---@param opts.on_error? fun(err: any): nil
 local function async_post(url, data, opts)
-  local json_data = vim.fn.json_encode(data)
+  local json_data = vim.json.encode(data)
 
   debug_log("POST %s (data size: %d bytes)", url, #json_data)
 
@@ -254,7 +254,9 @@ local function post_with_fallback(urls, data)
         local clients = decode_clients(response)
         if clients == 0 and index < #urls then
           debug_log("No clients for %s, trying fallback %d/%d", url, index + 1, #urls)
-          try_at(index + 1)
+          vim.schedule(function()
+            try_at(index + 1)
+          end)
         end
       end,
     })
