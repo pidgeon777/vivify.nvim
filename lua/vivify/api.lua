@@ -3,7 +3,6 @@
 local M = {}
 
 local config = require("vivify.config")
-local uv = vim.uv or vim.loop
 
 ---Check if running on Windows
 ---@return boolean
@@ -18,36 +17,31 @@ local function has_plenary()
   return ok
 end
 
----Check if running on Windows
----Python's quote() has safe='/' by default, so "/" is NOT encoded.
----All other special characters ARE encoded including ":" and "\" (Windows paths).
----@param str string String to encode
----@return string Encoded string
----Build the unique Viewer ID used by Vivify server
----Matches browser format for ID recognition
----@param str string Filepath
----@return string Path segment for sync URL
-local function build_viewer_id(str)
+---Percent-encode a filepath to match Python's urllib.parse.quote() with safe='/'.
+---This means:
+---  - "/" is preserved (NOT encoded)
+---  - ":" IS encoded to %3A (unlike our previous implementation)
+---  - All other special characters are encoded
+---This matches exactly what vivify.vim does via py3eval('quote(path)').
+---@param str string Filepath to encode
+---@return string URL-encoded path segment (without leading slash)
+local function percent_encode_path(str)
   if not str then
     return ""
   end
   -- Get absolute, normalized path
   str = vim.fn.fnamemodify(str, ":p")
 
-  -- On Windows, ensure forward slashes and DRIVE letter format
+  -- On Windows, ensure forward slashes
   if is_windows() then
     -- Convert \ to /
     str = str:gsub("\\", "/")
-    -- Ensure first char is NOT a slash for the segment (it will be added in final URL)
-    if str:sub(1,1) == "/" then
-      str = str:sub(2)
-    end
   end
 
-  -- Percent encode only essential shell/url characters, preserving path structure
-  -- We MUST keep ":" and "/" literal because Vivify's router uses them to identify the file
-  -- matches browser: C:/path/file.md
-  str = str:gsub("([^%w%-%._~:/])", function(c)
+  -- Percent encode everything except alphanumeric, -, _, ., ~, and /
+  -- This matches Python's quote() with safe='/' (the default)
+  -- IMPORTANT: ":" must be encoded as %3A to match vivify.vim behavior!
+  str = str:gsub("([^%w%-%._~/])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
 
@@ -121,9 +115,10 @@ function M.sync_content(bufnr)
     return
   end
 
-  -- Build URL using the standardized Viewer ID
-  -- Matches browser URL: http://127.0.0.1:31622/viewer/C:/path/to/file.md
-  local url = get_base_url() .. "/viewer/" .. build_viewer_id(filepath)
+  -- Build URL matching vivify.vim format: /viewer + percent_encoded_path (NO slash between!)
+  -- Example: http://localhost:31622/viewerC%3A/path/file.md
+  -- The server's urlToPath() strips "/viewer" prefix and decodes, yielding the filepath
+  local url = get_base_url() .. "/viewer" .. percent_encode_path(filepath)
 
   async_post(url, { content = content })
 end
@@ -150,8 +145,8 @@ function M.sync_cursor(bufnr)
     return
   end
 
-  -- Build URL using the standardized Viewer ID
-  local url = get_base_url() .. "/viewer/" .. build_viewer_id(filepath)
+  -- Build URL matching vivify.vim format (no slash between /viewer and path)
+  local url = get_base_url() .. "/viewer" .. percent_encode_path(filepath)
 
   async_post(url, { cursor = line })
 end
