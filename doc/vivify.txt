@@ -1,0 +1,261 @@
+*vivify.txt*        Neovim plugin for Vivify markdown preview
+
+================================================================================
+INTRODUCTION                                                            *vivify*
+
+vivify.nvim connects Neovim to the Vivify markdown preview tool.
+View and live-sync Markdown files while editing them in Neovim.
+
+This is a Lua port of vivify.vim with additional features and modern
+Neovim APIs.
+
+Features:~
+- Open the current buffer's contents in Vivify with |:Vivify|
+- All open viewers automatically update their content as you edit
+- All open viewers automatically scroll to keep in sync with your cursor
+
+Repository: https://github.com/pidgeon777/vivify.nvim
+Vivify: https://github.com/jannis-baum/Vivify
+
+================================================================================
+REQUIREMENTS                                               *vivify-requirements*
+
+- Neovim 0.9.0 or later (0.10+ recommended for vim.system())
+- Vivify installed and `viv` command in PATH
+- `curl` command available
+
+================================================================================
+INSTALLATION                                               *vivify-installation*
+
+Using lazy.nvim:~
+>lua
+    {
+      "pidgeon777/vivify.nvim",
+      cmd = { "Vivify" },
+      ft = { "markdown" },
+      opts = {
+        -- Configuration options (see |vivify-configuration|)
+      },
+    }
+<
+
+Using packer.nvim:~
+>lua
+    use {
+      "pidgeon777/vivify.nvim",
+      config = function()
+        require("vivify").setup()
+      end,
+    }
+<
+
+================================================================================
+USAGE                                                             *vivify-usage*
+
+                                                                       *:Vivify*
+:Vivify                     Open the current buffer in the Vivify browser viewer.
+                            The viewer will automatically sync content and
+                            cursor position as you edit.
+
+                                                                   *:VivifySync*
+:VivifySync                 Manually sync the current buffer content to all
+                            open Vivify viewers.
+
+                                                                 *:VivifyToggle*
+:VivifyToggle               Toggle auto-sync on/off. When disabled, content
+                            changes won't be automatically sent to viewers.
+
+                                                                  *:VivifyStart*
+:VivifyStart                Enable auto-sync if it was disabled.
+
+                                                                   *:VivifyStop*
+:VivifyStop                 Disable auto-sync. Viewers will no longer update
+                            automatically.
+
+                                                                 *:VivifyStatus*
+:VivifyStatus               Show current plugin status including configuration
+                            and whether auto-sync is active.
+
+Example keybinding:~
+>lua
+    vim.keymap.set("n", "<leader>v", "<cmd>Vivify<cr>", { desc = "Open Vivify" })
+<
+
+For Markdown files only:~
+>lua
+    vim.api.nvim_create_autocmd("FileType", {
+      pattern = "markdown",
+      callback = function()
+        vim.keymap.set("n", "<leader>v", "<cmd>Vivify<cr>", {
+          buffer = true,
+          desc = "Open Vivify",
+        })
+      end,
+    })
+<
+
+================================================================================
+CONFIGURATION                                             *vivify-configuration*
+
+Call `require("vivify").setup(opts)` with a table of options.
+
+Default configuration:~
+>lua
+    require("vivify").setup({
+      -- Port for Vivify server (uses $VIV_PORT or 31622 if not set)
+      port = nil,
+
+      -- Refresh content on TextChanged (true) or CursorHold (false)
+      instant_refresh = true,
+
+      -- Enable auto-scroll on cursor movement
+      auto_scroll = true,
+
+      -- Filetypes to treat as markdown
+      filetypes = { "markdown", "md" },
+
+      -- Enable debug logging
+      debug = false,
+    })
+<
+
+                                                              *vivify.port*
+port ~
+    Type: `number` or `nil`
+    Default: `nil` (uses $VIV_PORT environment variable, or 31622)
+
+    The port number where the Vivify server is running.
+
+                                                     *vivify.instant_refresh*
+instant_refresh ~
+    Type: `boolean`
+    Default: `true`
+
+    When `true`, content is synced on every |TextChanged| and |TextChangedI|
+    event (instant updates while typing).
+
+    When `false`, content is synced on |CursorHold| and |CursorHoldI| events
+    (less frequent updates, lower resource usage).
+
+                                                        *vivify.auto_scroll*
+auto_scroll ~
+    Type: `boolean`
+    Default: `true`
+
+    When `true`, the viewer will scroll to follow your cursor position on
+    |CursorMoved| and |CursorMovedI| events.
+
+                                                          *vivify.filetypes*
+filetypes ~
+    Type: `string[]`
+    Default: `{ "markdown", "md" }`
+
+    List of filetype patterns to recognize as markdown. These patterns are
+    matched against the buffer's filetype.
+
+    Example to add vimwiki support:
+>lua
+    require("vivify").setup({
+      filetypes = { "markdown", "md", "vimwiki" },
+    })
+<
+
+                                                             *vivify.debug*
+debug ~
+    Type: `boolean`
+    Default: `false`
+
+    Enable debug logging. When `true`, the plugin will output debug messages
+    for HTTP requests and other operations.
+
+================================================================================
+LUA API                                                             *vivify-api*
+
+The plugin exposes a Lua API for programmatic access.
+
+vivify.setup({opts})                                            *vivify.setup()*
+    Initialize the plugin with the given options. See |vivify-configuration|
+    for available options.
+
+vivify.open({bufnr})                                             *vivify.open()*
+    Open the specified buffer (or current buffer if nil) in Vivify viewer.
+
+vivify.sync_content({bufnr})                               *vivify.sync_content()*
+    Sync the content of the specified buffer to all open viewers.
+
+vivify.sync_cursor({bufnr})                                 *vivify.sync_cursor()*
+    Sync the cursor position of the specified buffer to all open viewers.
+
+vivify.enable()                                                *vivify.enable()*
+    Enable auto-sync (start autocmds).
+
+vivify.disable()                                              *vivify.disable()*
+    Disable auto-sync (stop autocmds).
+
+vivify.toggle()                                                *vivify.toggle()*
+    Toggle auto-sync on/off. Returns the new state (true = enabled).
+
+vivify.is_active()                                          *vivify.is_active()*
+    Check if auto-sync is currently active.
+
+vivify.get_config()                                        *vivify.get_config()*
+    Get the current configuration table.
+
+vivify.check_dependencies()                        *vivify.check_dependencies()*
+    Check if required dependencies (viv, curl) are available.
+    Returns (ok, error_message).
+
+================================================================================
+HEALTH CHECK                                                    *vivify-health*
+
+Run `:checkhealth vivify` to verify your installation.
+
+The health check will verify:
+- Neovim version compatibility
+- vim.system() availability (Neovim 0.10+)
+- viv command is in PATH
+- curl command is in PATH
+- Plugin configuration is valid
+- Vivify server is responding (optional)
+
+================================================================================
+TROUBLESHOOTING                                          *vivify-troubleshooting*
+
+Viewer doesn't update:~
+1. Check if Vivify is running: `viv --version`
+2. Check the port: `:VivifyStatus`
+3. Enable debug mode and check messages:
+>lua
+   require("vivify").setup({ debug = true })
+<
+4. Run `:checkhealth vivify`
+
+"viv command not found":~
+1. Install Vivify from https://github.com/jannis-baum/Vivify
+2. Make sure the `viv` binary is in your PATH
+3. Restart Neovim after installation
+
+Wrong port:~
+1. Check if $VIV_PORT is set: `echo $VIV_PORT`
+2. Set the port explicitly:
+>lua
+   require("vivify").setup({ port = 31622 })
+<
+
+================================================================================
+CHANGELOG                                                     *vivify-changelog*
+
+0.1.0 (2024)~
+- Initial release
+- Full port of vivify.vim to Lua
+- Modern Neovim APIs (vim.system, vim.api)
+- Health check support
+- Additional commands (VivifyToggle, VivifyStatus, etc.)
+
+================================================================================
+LICENSE                                                         *vivify-license*
+
+MIT License
+
+================================================================================
+ vim:tw=78:ts=8:ft=help:norl:

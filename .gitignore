@@ -1,0 +1,24 @@
+# Generated files
+doc/tags
+
+# Editor files
+*.swp
+*.swo
+*~
+.netrwhist
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# Lua
+*.luac
+luac.out
+
+# Testing
+.tests/
