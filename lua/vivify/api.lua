@@ -31,30 +31,33 @@ local startup_grace_ms = 2000
 ---All other special characters ARE encoded including ":" and "\" (Windows paths).
 ---@param str string String to encode
 ---@return string Encoded string
-local function percent_encode(str)
+---Build the unique Viewer ID used by Vivify server
+---On Windows, it matches the browser format: C:/path/file.md
+---@param str string Filepath
+---@return string Encoded ID for URL
+local function build_viewer_id(str)
   if not str then
     return ""
   end
   str = tostring(str)
 
-  -- On Windows, ensure we use consistent backslashes before encoding
-  -- This is critical because Vivify uses the path as a unique ID key
-  if is_windows() then
-    str = str:gsub("/", "\\")
-  end
+  -- Normalize to forward slashes for URL path compatibility
+  -- This matches the ID format seen in Chrome address bar: /viewer/C:/...
+  str = str:gsub("\\", "/")
 
-  -- Encode everything except core unreserved characters (ALPHA / DIGIT / "-" / "." / "_" / "~")
-  -- We MUST encode ":" and "\" on Windows to match automated terminal curl behavior
-  str = str:gsub("([^%w%-%._~])", function(c)
-    return string.format("%%%02X", string.byte(c))
-  end)
+  -- Encode only truly special characters (spaces, etc.)
+  -- Leave ":" and "/" intact to match the browser's ID string exactly
+  str = str:gsub(" ", "%%20")
+
   return str
 end
 
 ---Get the base URL for Vivify server
+---On Windows, uses 127.0.0.1 instead of localhost for better reliability
 ---@return string Base URL
 local function get_base_url()
-  return string.format("http://localhost:%d", config.get_port())
+  local host = is_windows() and "127.0.0.1" or "localhost"
+  return string.format("http://%s:%d", host, config.get_port())
 end
 
 ---Log debug message
@@ -132,12 +135,9 @@ function M.sync_content(bufnr)
     return
   end
 
-  -- Percent encode the full path
-  local encoded_path = percent_encode(filepath)
-  -- Vivify expects /viewerID (or /viewer/ID depending on how it was opened)
-  -- The original plugin uses: s:viv_url . '/viewer' . s:percent_encode(path)
-  -- No slash between /viewer and the encoded path!
-  local url = get_base_url() .. "/viewer" .. encoded_path
+  -- Build URL using the standardized Viewer ID
+  -- Matches browser URL: http://127.0.0.1:31622/viewer/C:/path/to/file.md
+  local url = get_base_url() .. "/viewer/" .. build_viewer_id(filepath)
 
   async_post(url, { content = content })
 end
@@ -164,10 +164,8 @@ function M.sync_cursor(bufnr)
     return
   end
 
-  -- Percent encode the full path
-  local encoded_path = percent_encode(filepath)
-  -- Match original: /viewerID (no slash)
-  local url = get_base_url() .. "/viewer" .. encoded_path
+  -- Build URL using the standardized Viewer ID
+  local url = get_base_url() .. "/viewer/" .. build_viewer_id(filepath)
 
   async_post(url, { cursor = line })
 end
