@@ -36,10 +36,16 @@ local function percent_encode(str)
     return ""
   end
   str = tostring(str)
-  -- IMPORTANT: Do NOT normalize backslashes here. 
-  -- We match Python's default behavior where '/' is safe, but '\' is not.
-  -- Encode everything except unreserved characters (RFC 3986) and "/"
-  str = str:gsub("([^%w%-%._~/])", function(c)
+
+  -- On Windows, ensure we use backslashes and encode them as %5C
+  -- This matches what Vivify server expects as a unique ID for the buffer
+  if is_windows() then
+    str = str:gsub("/", "\\")
+  end
+
+  -- Encode everything except unreserved characters (RFC 3986)
+  -- Note: even '/' is encoded now to ensure the path is treated as a single ID by Vivify
+  str = str:gsub("([^%w%-%._~])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
   return str
@@ -126,10 +132,10 @@ function M.sync_content(bufnr)
     return
   end
 
-  -- Percent encode the full path (matching original behavior exactly)
-  -- Original: s:viv_url . '/viewer' . s:percent_encode(expand('%:p'))
+  -- Percent encode the full path
   local encoded_path = percent_encode(filepath)
-  local url = get_base_url() .. "/viewer" .. encoded_path
+  -- Vivify expects /viewer/ID where ID is the encoded full path
+  local url = get_base_url() .. "/viewer/" .. encoded_path
 
   async_post(url, { content = content })
 end
@@ -156,9 +162,10 @@ function M.sync_cursor(bufnr)
     return
   end
 
-  -- Percent encode the full path (matching original behavior exactly)
+  -- Percent encode the full path
   local encoded_path = percent_encode(filepath)
-  local url = get_base_url() .. "/viewer" .. encoded_path
+  -- Vivify expects /viewer/ID where ID is the encoded full path
+  local url = get_base_url() .. "/viewer/" .. encoded_path
 
   async_post(url, { cursor = line })
 end
