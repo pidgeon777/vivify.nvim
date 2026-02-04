@@ -4,6 +4,36 @@ local M = {}
 
 local config = require("vivify.config")
 
+-- Logger setup (lazy loaded)
+---@type table|nil
+local logger = nil
+
+---Get or create the logger instance
+---@return table Logger instance
+local function get_logger()
+  if logger then
+    return logger
+  end
+  local ok, log = pcall(require, "plenary.log")
+  if ok then
+    logger = log.new({
+      plugin = "vivify.nvim",
+      level = config.options.debug and "debug" or "info",
+      use_console = false, -- Don't spam console
+      use_file = true, -- Log to file for debugging
+    })
+  else
+    -- Fallback logger that does nothing
+    logger = {
+      debug = function() end,
+      info = function() end,
+      warn = function() end,
+      error = function() end,
+    }
+  end
+  return logger
+end
+
 ---Check if running on Windows
 ---@return boolean
 local function is_windows()
@@ -17,30 +47,33 @@ local function has_plenary()
   return ok
 end
 
----Percent-encode a filepath to match Python's urllib.parse.quote() with safe='/'.
+---Percent-encode a filepath to match Vivify server's pathToURL() format.
+---The server uses: encodeURIComponent(path).replaceAll('%2F', '/')
 ---This means:
----  - "/" is preserved (NOT encoded)
----  - ":" IS encoded to %3A (unlike our previous implementation)
----  - All other special characters are encoded
----This matches exactly what vivify.vim does via py3eval('quote(path)').
+---  - "/" is preserved (becomes %2F then replaced back to /)
+---  - All other special characters including "\" and ":" are encoded
 ---@param str string Filepath to encode
----@return string URL-encoded path segment (without leading slash)
-local function percent_encode_path(str)
+---@return string URL-encoded path (matching server's pathToURL format)
+local function encode_for_vivify(str)
   if not str then
     return ""
   end
   -- Get absolute, normalized path
   str = vim.fn.fnamemodify(str, ":p")
 
-  -- On Windows, ensure forward slashes
-  if is_windows() then
-    -- Convert \ to /
-    str = str:gsub("\\", "/")
-  end
+  -- Use encodeURIComponent-like encoding:
+  -- Everything is encoded except: A-Z a-z 0-9 - _ . ! ~ * ' ( )
+  -- But we want to also preserve "/" to match the server's replaceAll('%2F', '/')
+  -- 
+  -- Actually, looking at the server's pathToURL:
+  --   `/${route}/${encodeURIComponent(withoutPrefix).replaceAll('%2F', '/')}`
+  -- 
+  -- It encodes everything then replaces %2F back to /
+  -- So we need to encode everything EXCEPT forward slashes
+  --
+  -- On Windows paths have backslashes which should be encoded as %5C
 
-  -- Percent encode everything except alphanumeric, -, _, ., ~, and /
-  -- This matches Python's quote() with safe='/' (the default)
-  -- IMPORTANT: ":" must be encoded as %3A to match vivify.vim behavior!
+  -- Encode all special characters except forward slash
   str = str:gsub("([^%w%-%._~/])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
@@ -55,20 +88,36 @@ local function get_base_url()
   return string.format("http://localhost:%d", config.get_port())
 end
 
----Log debug message
+---Log debug message (both to notify and file log)
 ---@param msg string Message to log
 ---@vararg any Additional format arguments
 local function debug_log(msg, ...)
+  local formatted = string.format(msg, ...)
+  -- Always log to file for debugging
+  get_logger().debug(formatted)
+
   if config.options.debug then
-    local formatted = string.format(msg, ...)
     vim.schedule(function()
       vim.notify("[vivify.nvim] " .. formatted, vim.log.levels.DEBUG)
     end)
   end
 end
 
----Execute async HTTP POST request using direct curl
----Uses jobstart with array to avoid console window flashing on Windows
+---Log error message
+---@param msg string Message to log
+---@vararg any Additional format arguments
+local function error_log(msg, ...)
+  local formatted = string.format(msg, ...)
+  get_logger().error(formatted)
+  if config.options.debug then
+    vim.schedule(function()
+      vim.notify("[vivify.nvim] ERROR: " .. formatted, vim.log.levels.ERROR)
+    end)
+  end
+end
+
+---Execute async HTTP POST request using plenary.curl
+---This is the reliable cross-platform solution that works correctly
 ---@param url string Full URL
 ---@param data table Data to send as JSON
 local function async_post(url, data)
@@ -76,21 +125,31 @@ local function async_post(url, data)
 
   debug_log("POST %s (data size: %d bytes)", url, #json_data)
 
-  -- Direct curl call. In Neovim, jobstart with an array doesn't spawn a window.
-  -- We don't use server_ready gates to ensure requests are always attempted.
-  local job_id = vim.fn.jobstart({
-    "curl",
-    "-s",
-    "-X", "POST",
-    "-H", "Content-Type: application/json",
-    "--data", "@-",
-    url,
-  })
-
-  if job_id > 0 then
-    vim.fn.chansend(job_id, json_data)
-    vim.fn.chanclose(job_id, "stdin")
+  -- Use plenary.curl for reliable async HTTP
+  local ok, curl = pcall(require, "plenary.curl")
+  if not ok then
+    error_log("plenary.curl not available")
+    return
   end
+
+  -- Perform async POST request
+  curl.post(url, {
+    body = json_data,
+    headers = {
+      ["Content-Type"] = "application/json",
+    },
+    callback = function(response)
+      if response.status and response.status >= 200 and response.status < 300 then
+        debug_log("POST success (status %d, clients: %s)", response.status, response.body or "?")
+      elseif response.status then
+        debug_log("POST response status: %d", response.status)
+      end
+    end,
+    on_error = function(err)
+      -- Only log if debug mode to avoid spam when server isn't running
+      debug_log("POST error: %s", vim.inspect(err))
+    end,
+  })
 end
 
 ---Sync buffer content to Vivify viewer
@@ -115,10 +174,11 @@ function M.sync_content(bufnr)
     return
   end
 
-  -- Build URL matching vivify.vim format: /viewer + percent_encoded_path (NO slash between!)
-  -- Example: http://localhost:31622/viewerC%3A/path/file.md
+  -- Build URL matching Vivify server's pathToURL format: /viewer/ + encoded_path
+  -- The server uses: `/${route}/${encodeURIComponent(path).replaceAll('%2F', '/')}`
+  -- Example: http://localhost:31622/viewer/C%3A%5CUsers%5Cpath%5Cfile.md
   -- The server's urlToPath() strips "/viewer" prefix and decodes, yielding the filepath
-  local url = get_base_url() .. "/viewer" .. percent_encode_path(filepath)
+  local url = get_base_url() .. "/viewer/" .. encode_for_vivify(filepath)
 
   async_post(url, { content = content })
 end
@@ -145,8 +205,8 @@ function M.sync_cursor(bufnr)
     return
   end
 
-  -- Build URL matching vivify.vim format (no slash between /viewer and path)
-  local url = get_base_url() .. "/viewer" .. percent_encode_path(filepath)
+  -- Build URL matching Vivify server's pathToURL format (with slash after /viewer)
+  local url = get_base_url() .. "/viewer/" .. encode_for_vivify(filepath)
 
   async_post(url, { cursor = line })
 end
