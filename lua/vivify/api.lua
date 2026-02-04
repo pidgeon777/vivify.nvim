@@ -4,6 +4,12 @@ local M = {}
 
 local config = require("vivify.config")
 
+---Check if running on Windows
+---@return boolean
+local function is_windows()
+  return vim.fn.has("win32") == 1 or vim.fn.has("win64") == 1
+end
+
 ---Check if plenary is available
 ---@return boolean
 local function has_plenary()
@@ -52,10 +58,6 @@ local function debug_log(msg, ...)
 end
 
 ---Execute async HTTP POST request using plenary.curl
----This is the most performant and cross-platform solution:
---- - No external processes spawned
---- - No console windows on Windows
---- - Pure Lua HTTP via luv/libuv
 ---@param url string Full URL
 ---@param data table Data to send as JSON
 local function async_post(url, data)
@@ -63,25 +65,28 @@ local function async_post(url, data)
 
   debug_log("POST %s (data size: %d bytes)", url, #json_data)
 
-  -- Use plenary.curl for async HTTP - no external processes, no console windows
-  local curl = require("plenary.curl")
+  local has_plenary, curl = pcall(require, "plenary.curl")
+  if not has_plenary then
+    return
+  end
 
-  curl.post(url, {
-    body = json_data,
-    headers = {
-      ["Content-Type"] = "application/json",
-    },
-    -- Async callback - fire and forget for sync operations
-    callback = function(response)
-      if config.options.debug then
-        if response.status ~= 200 and response.status ~= 0 then
+  -- Wrap in pcall to suppress plenary's internal error notifications if server is down
+  pcall(function()
+    curl.post(url, {
+      body = json_data,
+      headers = {
+        ["Content-Type"] = "application/json",
+      },
+      -- Fire and forget
+      callback = function(response)
+        if config.options.debug and response.status ~= 200 then
           vim.schedule(function()
-            debug_log("POST response: status=%s", tostring(response.status))
+            debug_log("POST failed (status %s)", tostring(response.status))
           end)
         end
-      end
-    end,
-  })
+      end,
+    })
+  end)
 end
 
 ---Sync buffer content to Vivify viewer
@@ -107,9 +112,9 @@ function M.sync_content(bufnr)
   end
 
   -- Percent encode the full path (matching original behavior)
-  -- Original: s:viv_url . '/viewer' . s:percent_encode(expand('%:p'))
   local encoded_path = percent_encode(filepath)
-  local url = get_base_url() .. "/viewer" .. encoded_path
+  -- Ensure leading slash between /viewer and path
+  local url = get_base_url() .. "/viewer/" .. encoded_path
 
   async_post(url, { content = content })
 end
@@ -138,7 +143,8 @@ function M.sync_cursor(bufnr)
 
   -- Percent encode the full path (matching original behavior)
   local encoded_path = percent_encode(filepath)
-  local url = get_base_url() .. "/viewer" .. encoded_path
+  -- Ensure leading slash between /viewer and path
+  local url = get_base_url() .. "/viewer/" .. encoded_path
 
   async_post(url, { cursor = line })
 end
@@ -170,11 +176,19 @@ function M.open(bufnr)
 
   debug_log("Opening with viv (%s): %s", viv_cmd, arg)
 
-  -- Use jobstart with detach - viv only runs once to open the browser
-  -- The continuous sync is handled by async_post via plenary.curl
-  vim.fn.jobstart({ viv_cmd, arg }, {
-    detach = true,
-  })
+  -- Cross-platform job execution
+  if is_windows() then
+    -- On Windows, use cmd /c with string command for maximum compatibility with .cmd files
+    local cmd_str = string.format('cmd /c ""%s" "%s""', viv_cmd, arg)
+    vim.fn.jobstart(cmd_str, {
+      detach = true,
+    })
+  else
+    -- Unix: standard array execution
+    vim.fn.jobstart({ viv_cmd, arg }, {
+      detach = true,
+    })
+  end
 end
 
 ---Check if Vivify dependencies are available
