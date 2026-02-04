@@ -3,6 +3,7 @@
 local M = {}
 
 local config = require("vivify.config")
+local uv = vim.uv or vim.loop
 
 ---Check if running on Windows
 ---@return boolean
@@ -16,6 +17,14 @@ local function has_plenary()
   local ok = pcall(require, "plenary.curl")
   return ok
 end
+
+---@type boolean
+local server_ready = false
+
+---@type integer
+local last_open_ms = 0
+
+local startup_grace_ms = 2000
 
 ---URL percent encode a string (matching Python's urllib.parse.quote behavior)
 ---Python's quote() has safe='/' by default, so "/" is NOT encoded.
@@ -70,23 +79,32 @@ local function async_post(url, data)
     return
   end
 
-  -- Wrap in pcall to suppress plenary's internal error notifications if server is down
-  pcall(function()
-    curl.post(url, {
-      body = json_data,
-      headers = {
-        ["Content-Type"] = "application/json",
-      },
-      -- Fire and forget
-      callback = function(response)
-        if config.options.debug and response.status ~= 200 then
-          vim.schedule(function()
-            debug_log("POST failed (status %s)", tostring(response.status))
-          end)
-        end
-      end,
-    })
-  end)
+  -- Avoid spamming requests before the server is up
+  local now_ms = uv.now()
+  if not server_ready and (now_ms - last_open_ms) < startup_grace_ms then
+    return
+  end
+
+  curl.post(url, {
+    body = json_data,
+    headers = {
+      ["Content-Type"] = "application/json",
+    },
+    on_error = function()
+      -- Suppress errors when the server isn't ready or is temporarily unavailable
+      return
+    end,
+    callback = function(response)
+      if response.status and response.status >= 200 and response.status < 500 then
+        server_ready = true
+      end
+      if config.options.debug and response.status and response.status ~= 200 then
+        vim.schedule(function()
+          debug_log("POST failed (status %s)", tostring(response.status))
+        end)
+      end
+    end,
+  })
 end
 
 ---Sync buffer content to Vivify viewer
@@ -175,6 +193,10 @@ function M.open(bufnr)
   local viv_cmd = config.get_viv_binary()
 
   debug_log("Opening with viv (%s): %s", viv_cmd, arg)
+
+  -- Mark server as not ready until it responds
+  server_ready = false
+  last_open_ms = uv.now()
 
   -- Cross-platform job execution
   if is_windows() then
