@@ -49,9 +49,11 @@ end
 
 ---Percent-encode a filepath to match Vivify server's pathToURL() format.
 ---The server uses: encodeURIComponent(path).replaceAll('%2F', '/')
----This means:
----  - "/" is preserved (becomes %2F then replaced back to /)
----  - All other special characters including "\" and ":" are encoded
+---
+---CRITICAL for Windows: The browser URL is constructed by Node.js which uses
+---backslashes for Windows paths. But Neovim on Windows uses forward slashes
+---in buffer names. We must convert to backslashes to match the browser.
+---
 ---@param str string Filepath to encode
 ---@return string URL-encoded path (matching server's pathToURL format)
 local function encode_for_vivify(str)
@@ -61,19 +63,20 @@ local function encode_for_vivify(str)
   -- Get absolute, normalized path
   str = vim.fn.fnamemodify(str, ":p")
 
-  -- Use encodeURIComponent-like encoding:
-  -- Everything is encoded except: A-Z a-z 0-9 - _ . ! ~ * ' ( )
-  -- But we want to also preserve "/" to match the server's replaceAll('%2F', '/')
-  -- 
-  -- Actually, looking at the server's pathToURL:
-  --   `/${route}/${encodeURIComponent(withoutPrefix).replaceAll('%2F', '/')}`
-  -- 
-  -- It encodes everything then replaces %2F back to /
-  -- So we need to encode everything EXCEPT forward slashes
-  --
-  -- On Windows paths have backslashes which should be encoded as %5C
+  -- CRITICAL: On Windows, convert forward slashes to backslashes
+  -- This is because:
+  -- 1. Neovim on Windows uses forward slashes in buffer names (e.g., c:/work/...)
+  -- 2. The viv CLI uses Node.js path.resolve() which returns backslashes (e.g., C:\Work\...)
+  -- 3. The browser registers the path with backslashes
+  -- 4. We must match that exact format for the sync to work
+  if is_windows() then
+    str = str:gsub("/", "\\")
+  end
 
-  -- Encode all special characters except forward slash
+  -- After converting slashes, encode all special characters
+  -- On Windows, backslashes become %5C
+  -- Colons become %3A
+  -- Forward slashes are NOT encoded (only relevant on Unix)
   str = str:gsub("([^%w%-%._~/])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
