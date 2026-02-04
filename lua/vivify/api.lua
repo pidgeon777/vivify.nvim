@@ -37,14 +37,14 @@ local function percent_encode(str)
   end
   str = tostring(str)
 
-  -- On Windows, ensure we use backslashes and encode them as %5C
-  -- This matches what Vivify server expects as a unique ID for the buffer
+  -- On Windows, ensure we use consistent backslashes before encoding
+  -- This is critical because Vivify uses the path as a unique ID key
   if is_windows() then
     str = str:gsub("/", "\\")
   end
 
-  -- Encode everything except unreserved characters (RFC 3986)
-  -- Note: even '/' is encoded now to ensure the path is treated as a single ID by Vivify
+  -- Encode everything except core unreserved characters (ALPHA / DIGIT / "-" / "." / "_" / "~")
+  -- We MUST encode ":" and "\" on Windows to match automated terminal curl behavior
   str = str:gsub("([^%w%-%._~])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
@@ -134,8 +134,10 @@ function M.sync_content(bufnr)
 
   -- Percent encode the full path
   local encoded_path = percent_encode(filepath)
-  -- Vivify expects /viewer/ID where ID is the encoded full path
-  local url = get_base_url() .. "/viewer/" .. encoded_path
+  -- Vivify expects /viewerID (or /viewer/ID depending on how it was opened)
+  -- The original plugin uses: s:viv_url . '/viewer' . s:percent_encode(path)
+  -- No slash between /viewer and the encoded path!
+  local url = get_base_url() .. "/viewer" .. encoded_path
 
   async_post(url, { content = content })
 end
@@ -164,8 +166,8 @@ function M.sync_cursor(bufnr)
 
   -- Percent encode the full path
   local encoded_path = percent_encode(filepath)
-  -- Vivify expects /viewer/ID where ID is the encoded full path
-  local url = get_base_url() .. "/viewer/" .. encoded_path
+  -- Match original: /viewerID (no slash)
+  local url = get_base_url() .. "/viewer" .. encoded_path
 
   async_post(url, { cursor = line })
 end
