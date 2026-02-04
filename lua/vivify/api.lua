@@ -50,9 +50,15 @@ end
 ---Percent-encode a filepath to match Vivify server's pathToURL() format.
 ---The server uses: encodeURIComponent(path).replaceAll('%2F', '/')
 ---
----CRITICAL for Windows: The browser URL is constructed by Node.js which uses
----backslashes for Windows paths. But Neovim on Windows uses forward slashes
----in buffer names. We must convert to backslashes to match the browser.
+---CRITICAL for Windows: The browser URL is constructed by Node.js which uses:
+---1. Backslashes for path separators (not forward slashes)
+---2. The actual filesystem case (C:\Work\MEGA not c:\work\mega)
+---
+---Neovim on Windows may have:
+---1. Forward slashes in buffer names (c:/work/...)
+---2. Lowercase paths depending on how the file was opened
+---
+---We use fs_realpath to get the true filesystem path with correct case.
 ---
 ---@param str string Filepath to encode
 ---@return string URL-encoded path (matching server's pathToURL format)
@@ -60,23 +66,29 @@ local function encode_for_vivify(str)
   if not str then
     return ""
   end
+
   -- Get absolute, normalized path
   str = vim.fn.fnamemodify(str, ":p")
 
-  -- CRITICAL: On Windows, convert forward slashes to backslashes
-  -- This is because:
-  -- 1. Neovim on Windows uses forward slashes in buffer names (e.g., c:/work/...)
-  -- 2. The viv CLI uses Node.js path.resolve() which returns backslashes (e.g., C:\Work\...)
-  -- 3. The browser registers the path with backslashes
-  -- 4. We must match that exact format for the sync to work
+  -- CRITICAL: On Windows, use fs_realpath to get the TRUE filesystem path
+  -- This resolves:
+  -- 1. Case differences (c:\work -> C:\Work as stored on disk)
+  -- 2. Slash direction (returns backslashes on Windows)
+  -- This matches exactly what Node.js path.resolve() returns
   if is_windows() then
-    str = str:gsub("/", "\\")
+    local uv = vim.uv or vim.loop
+    local realpath = uv.fs_realpath(str)
+    if realpath then
+      str = realpath
+    else
+      -- Fallback: at least convert forward slashes to backslashes
+      str = str:gsub("/", "\\")
+    end
   end
 
-  -- After converting slashes, encode all special characters
-  -- On Windows, backslashes become %5C
-  -- Colons become %3A
-  -- Forward slashes are NOT encoded (only relevant on Unix)
+  -- Encode all special characters except forward slash
+  -- On Windows: backslashes become %5C, colons become %3A
+  -- On Unix: forward slashes are preserved
   str = str:gsub("([^%w%-%._~/])", function(c)
     return string.format("%%%02X", string.byte(c))
   end)
