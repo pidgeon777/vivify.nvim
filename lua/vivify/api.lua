@@ -4,6 +4,13 @@ local M = {}
 
 local config = require("vivify.config")
 
+---Check if plenary is available
+---@return boolean
+local function has_plenary()
+  local ok = pcall(require, "plenary.curl")
+  return ok
+end
+
 ---URL percent encode a string (matching Python's urllib.parse.quote behavior)
 ---Python's quote() has safe='/' by default, so "/" is NOT encoded.
 ---All other special characters ARE encoded including ":" and "\" (Windows paths).
@@ -44,8 +51,11 @@ local function debug_log(msg, ...)
   end
 end
 
----Execute async HTTP POST request using curl (exactly like original vivify.vim)
----Uses jobstart which does NOT create visible console windows on any OS
+---Execute async HTTP POST request using plenary.curl
+---This is the most performant and cross-platform solution:
+--- - No external processes spawned
+--- - No console windows on Windows
+--- - Pure Lua HTTP via luv/libuv
 ---@param url string Full URL
 ---@param data table Data to send as JSON
 local function async_post(url, data)
@@ -53,30 +63,25 @@ local function async_post(url, data)
 
   debug_log("POST %s (data size: %d bytes)", url, #json_data)
 
-  -- Use jobstart with curl - this is EXACTLY what the original vivify.vim does
-  -- jobstart runs processes without visible console windows on all platforms
-  local job_id = vim.fn.jobstart({
-    "curl",
-    "-s", -- silent
-    "-X", "POST",
-    "-H", "Content-type: application/json",
-    "--data", "@-", -- read from stdin
-    url,
-  }, {
-    on_stderr = function(_, data_lines)
-      if config.options.debug and data_lines and data_lines[1] ~= "" then
-        vim.schedule(function()
-          debug_log("curl error: %s", table.concat(data_lines, "\n"))
-        end)
+  -- Use plenary.curl for async HTTP - no external processes, no console windows
+  local curl = require("plenary.curl")
+
+  curl.post(url, {
+    body = json_data,
+    headers = {
+      ["Content-Type"] = "application/json",
+    },
+    -- Async callback - fire and forget for sync operations
+    callback = function(response)
+      if config.options.debug then
+        if response.status ~= 200 and response.status ~= 0 then
+          vim.schedule(function()
+            debug_log("POST response: status=%s", tostring(response.status))
+          end)
+        end
       end
     end,
   })
-
-  if job_id > 0 then
-    -- Send data via stdin and close (exactly like original)
-    vim.fn.chansend(job_id, json_data)
-    vim.fn.chanclose(job_id, "stdin")
-  end
 end
 
 ---Sync buffer content to Vivify viewer
@@ -165,9 +170,8 @@ function M.open(bufnr)
 
   debug_log("Opening with viv (%s): %s", viv_cmd, arg)
 
-  -- Use jobstart - this is EXACTLY what the original vivify.vim does
-  -- jobstart runs processes without visible console windows on all platforms
-  -- Original: call s:job_start(['viv', ...], {'in_io': 'null', 'out_io': 'null', 'err_io': 'null'})
+  -- Use jobstart with detach - viv only runs once to open the browser
+  -- The continuous sync is handled by async_post via plenary.curl
   vim.fn.jobstart({ viv_cmd, arg }, {
     detach = true,
   })
@@ -177,6 +181,11 @@ end
 ---@return boolean ok
 ---@return string|nil error_message
 function M.check_dependencies()
+  -- Check for plenary.nvim
+  if not has_plenary() then
+    return false, "plenary.nvim not found. Please install nvim-lua/plenary.nvim"
+  end
+
   -- Get the configured viv binary
   local viv_cmd = config.get_viv_binary()
 
@@ -187,11 +196,6 @@ function M.check_dependencies()
     else
       return false, string.format("Custom viv binary not found: '%s'. Check your viv_binary config.", viv_cmd)
     end
-  end
-
-  -- Check for curl
-  if vim.fn.executable("curl") ~= 1 then
-    return false, "'curl' command not found in PATH"
   end
 
   return true, nil

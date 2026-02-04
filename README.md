@@ -19,9 +19,9 @@ A modern Lua port of [vivify.vim](https://github.com/jannis-baum/vivify.vim) - c
 
 ## 📋 Requirements
 
-- **Neovim** 0.9.0 or later (0.10+ recommended for `vim.system()`)
+- **Neovim** 0.9.0 or later
+- **[plenary.nvim](https://github.com/nvim-lua/plenary.nvim)** (for HTTP requests)
 - **[Vivify](https://github.com/jannis-baum/Vivify)** installed with `viv` command in PATH
-- **curl** command available
 
 ## 📦 Installation
 
@@ -30,6 +30,7 @@ A modern Lua port of [vivify.vim](https://github.com/jannis-baum/vivify.vim) - c
 ```lua
 {
   "pidgeon777/vivify.nvim",
+  dependencies = { "nvim-lua/plenary.nvim" },
   cmd = { "Vivify", "VivifyToggle", "VivifyStatus" },
   ft = { "markdown" },
   keys = {
@@ -46,6 +47,7 @@ A modern Lua port of [vivify.vim](https://github.com/jannis-baum/vivify.vim) - c
 ```lua
 use {
   "pidgeon777/vivify.nvim",
+  requires = { "nvim-lua/plenary.nvim" },
   config = function()
     require("vivify").setup()
   end,

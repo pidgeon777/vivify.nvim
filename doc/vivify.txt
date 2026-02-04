@@ -20,9 +20,9 @@ Vivify: https://github.com/jannis-baum/Vivify
 ================================================================================
 REQUIREMENTS                                               *vivify-requirements*
 
-- Neovim 0.9.0 or later (0.10+ recommended for vim.system())
+- Neovim 0.9.0 or later
+- plenary.nvim (https://github.com/nvim-lua/plenary.nvim)
 - Vivify installed and `viv` command in PATH
-- `curl` command available
 
 ================================================================================
 INSTALLATION                                               *vivify-installation*
@@ -31,6 +31,7 @@ Using lazy.nvim:~
 >lua
     {
       "pidgeon777/vivify.nvim",
+      dependencies = { "nvim-lua/plenary.nvim" },
       cmd = { "Vivify" },
       ft = { "markdown" },
       opts = {

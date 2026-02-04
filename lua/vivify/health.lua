@@ -19,11 +19,15 @@ function M.check()
     vim.health.ok(string.format("Neovim version: %s", version_str))
   end
 
-  -- Check vim.system availability (0.10+)
-  if vim.system then
-    vim.health.ok("vim.system() available (Neovim 0.10+)")
+  -- Check for plenary.nvim (required dependency)
+  local has_plenary, plenary_curl = pcall(require, "plenary.curl")
+  if has_plenary then
+    vim.health.ok("plenary.nvim found (using plenary.curl for HTTP)")
   else
-    vim.health.warn("vim.system() not available", { "Using vim.fn.jobstart() fallback", "Upgrade to Neovim 0.10+ for better async support" })
+    vim.health.error("plenary.nvim not found", {
+      "Install nvim-lua/plenary.nvim",
+      "This is required for HTTP requests without console windows",
+    })
   end
 
   -- Check for viv executable (respect custom path)
@@ -61,17 +65,7 @@ function M.check()
     end
   end
 
-  -- Check for curl
-  if vim.fn.executable("curl") == 1 then
-    vim.health.ok("'curl' command found in PATH")
-  else
-    vim.health.error("'curl' command not found in PATH", {
-      "Install curl for your operating system",
-      "Windows: winget install curl.curl",
-      "macOS: brew install curl",
-      "Linux: Use your package manager (apt, yum, pacman, etc.)",
-    })
-  end
+  -- Note: curl is no longer required - we use plenary.curl for HTTP requests
 
   -- Check configuration
   local cfg_ok, cfg = pcall(require, "vivify.config")
